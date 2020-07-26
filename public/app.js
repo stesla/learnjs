@@ -1,6 +1,10 @@
 'use strict';
 
-var learnjs = {};
+var learnjs = {
+  poolId: 'us-east-1:8d6a3d56-941e-4e39-aec2-a9ffbd801d3f'
+};
+
+learnjs.identity = new $.Deferred();
 
 learnjs.problems = [
   {
@@ -27,6 +31,12 @@ learnjs.applyObject = function(obj, elem) {
   }
 }
 
+learnjs.addProfileLink = function(profile) {
+  var link = learnjs.template('profile-link');
+  link.find('a').text(profile.email);
+  $('.signin-bar').prepend(link);
+};
+
 learnjs.flashElement = function(elem, content) {
   elem.fadeOut('fast', function() {
     elem.html(content);
@@ -34,11 +44,11 @@ learnjs.flashElement = function(elem, content) {
   });
 }
 
-learnjs.buildCorrectFlash = function(problemNumber) {
+learnjs.buildCorrectFlash = function(problemNum) {
   var correctFlash = learnjs.template('correct-flash');
   var link = correctFlash.find('a');
-  if (problemNumber < learnjs.problems.length) {
-    link.attr('href', '#problem-' + (problemNumber + 1));
+  if (problemNum < learnjs.problems.length) {
+    link.attr('href', '#problem-' + (problemNum + 1));
   } else {
     link.attr('href', '');
     link.text("You're Finished!");
@@ -48,7 +58,7 @@ learnjs.buildCorrectFlash = function(problemNumber) {
 
 learnjs.problemView = function(data) {
   var problemNumber = parseInt(data, 10);
-  var view = $('.templates .problem-view').clone();
+  var view = learnjs.template('problem-view');
   var problemData = learnjs.problems[problemNumber - 1];
   var resultFlash = view.find('.result');
 
@@ -70,10 +80,10 @@ learnjs.problemView = function(data) {
   
   if (problemNumber < learnjs.problems.length) {
     var buttonItem = learnjs.template('skip-btn');
-    buttonItem.find('a').attr('href', '#problem-' + (problemNumber +1));
+    buttonItem.find('a').attr('href', '#problem-' + (problemNumber + 1));
     $('.nav-list').append(buttonItem);
     view.bind('removingView', function() {
-      buttonItem.remove()
+      buttonItem.remove();
     });
   }
 
@@ -87,9 +97,18 @@ learnjs.landingView = function() {
   return learnjs.template('landing-view');
 }
 
+learnjs.profileView = function() {
+  var view = learnjs.template('profile-view');
+  learnjs.identity.done(function(identity) {
+    view.find('.email').text(identity.email);
+  });
+  return view;
+}
+
 learnjs.showView = function(hash) {
   var routes = {
     '#problem': learnjs.problemView,
+    '#profile': learnjs.profileView,
     '#': learnjs.landingView,
     '': learnjs.landingView
   };
@@ -106,4 +125,47 @@ learnjs.appOnReady = function() {
     learnjs.showView(window.location.hash);
   };
   learnjs.showView(window.location.hash);
+  learnjs.identity.done(learnjs.addProfileLink);
+}
+
+learnjs.awsRefresh = function() {
+  var deferred = new $.Deferred();
+  AWS.config.credentials.refresh(function(err) {
+    if (err) {
+      deferred.reject(err);
+    } else {
+      deferred.resolve(AWS.config.credentials.identityId);
+    }
+  });
+  return deferred.promise();
+}
+
+function googleSignIn(googleUser) {
+  var id_token = googleUser.getAuthResponse().id_token;
+  AWS.config.update({
+    region: 'us-east-1',
+    credentials: new AWS.CognitoIdentityCredentials({
+      IdentityPoolId: learnjs.poolId,
+      Logins: {
+        'accounts.google.com': id_token
+      }
+    })
+  })
+  function refresh() {
+    return gapi.auth2.getAuthInstance().signIn({
+      prompt: 'login'
+    }).then(function(userUpdate) {
+      var creds = AWS.config.credentials;
+      var newToken = userUpdate.getAuthResponse().id_token;
+      creds.params.Logins['accounts.google.com'] = newToken;
+      return learnjs.awsRefresh();
+    });
+  }
+  learnjs.awsRefresh().then(function(id) {
+    learnjs.identity.resolve({
+      id: id,
+      email: googleUser.getBasicProfile().getEmail(),
+      refresh: refresh
+    });
+  });
 }
